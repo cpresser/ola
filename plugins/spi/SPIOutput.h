@@ -113,6 +113,7 @@ class SPIOutput: public ola::rdm::DiscoverableRDMControllerInterface {
   void CombinedP9813Control(const DmxBuffer &buffer);
   void IndividualAPA102Control(const DmxBuffer &buffer);
   void CombinedAPA102Control(const DmxBuffer &buffer);
+  void IndividualWS2812Control(const DmxBuffer &buffer);
 
   unsigned int LPD8806BufferSize() const;
   void WriteSPIData(const uint8_t *data, unsigned int length);
@@ -180,6 +181,7 @@ class SPIOutput: public ola::rdm::DiscoverableRDMControllerInterface {
   static const uint16_t SPI_DELAY;
   static const uint32_t SPI_SPEED;
   static const uint16_t WS2801_SLOTS_PER_PIXEL;
+  static const uint16_t WS2812_SLOTS_PER_PIXEL;
   static const uint16_t LPD8806_SLOTS_PER_PIXEL;
   static const uint16_t P9813_SLOTS_PER_PIXEL;
   static const uint16_t P9813_SPI_BYTES_PER_PIXEL;

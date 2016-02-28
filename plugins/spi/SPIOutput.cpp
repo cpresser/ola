@@ -48,6 +48,7 @@
 
 #include "plugins/spi/SPIBackend.h"
 #include "plugins/spi/SPIOutput.h"
+#include "plugins/spi/SPIWS2812LUT.h"
 
 namespace ola {
 namespace plugin {
@@ -87,6 +88,7 @@ const uint16_t SPIOutput::WS2801_SLOTS_PER_PIXEL = 3;
 const uint16_t SPIOutput::LPD8806_SLOTS_PER_PIXEL = 3;
 const uint16_t SPIOutput::P9813_SLOTS_PER_PIXEL = 3;
 const uint16_t SPIOutput::APA102_SLOTS_PER_PIXEL = 3;
+const uint16_t SPIOutput::WS2812_SLOTS_PER_PIXEL = 3;
 
 // Number of bytes that each pixel uses on the SPI wires
 // (if it differs from 1:1 with colors)
@@ -196,6 +198,8 @@ SPIOutput::SPIOutput(const UID &uid, SPIBackendInterface *backend,
                                       "APA102 Individual Control"));
   personalities.push_back(Personality(APA102_SLOTS_PER_PIXEL,
                                       "APA102 Combined Control"));
+  personalities.push_back(Personality(m_pixel_count * WS2812_SLOTS_PER_PIXEL,
+                                      "WS2812 Individual Control"));
   m_personality_collection.reset(new PersonalityCollection(personalities));
   m_personality_manager.reset(new PersonalityManager(
       m_personality_collection.get()));
@@ -316,6 +320,9 @@ bool SPIOutput::InternalWriteDMX(const DmxBuffer &buffer) {
     case 8:
       CombinedAPA102Control(buffer);
       break;
+    case 9:
+      IndividualWS2812Control(buffer);
+      break;
     default:
       break;
   }
@@ -333,6 +340,67 @@ void SPIOutput::IndividualWS2801Control(const DmxBuffer &buffer) {
 
   unsigned int new_length = output_length;
   buffer.GetRange(m_start_address - 1, output, &new_length);
+  m_backend->Commit(m_output_number);
+}
+
+void SPIOutput::IndividualWS2812Control(const DmxBuffer &buffer) {
+  /*
+   * This is an hack!
+   *
+   * Basically the RaspberryPI cant drive WS2812 Pixels because they have
+   * some strict timing requirements.
+   * Using the SPI-Module we can emulate those pulses.
+   * This will only work if the SPI-Module outputs all data in one consecutive
+   * stream without any pauses. More recent versions of the Raspberry Kernel
+   * seem to implement DMA for SPI which makes this possible.
+   *
+   * WS2811-Chips have similar timings but not exactly the same as WS2812.
+   * Some sources say the most important part is the total period-time
+   * of one bit. There are lots of descriptions of WS2812-timing requirements
+   * out there, one of them is: (with +-150ns tolerance)
+   * 0-Bit 0.25us high, 1us low
+   * 1-Bit 0.6us high, 0.65us low
+   *
+   * Running the SPI at 4Mhz gives us a pulse-width of 250ns
+   * Using a 5-bit pattern we can emulate those timings
+   *   0-Bit: 10000 (0.25us high, 1us low)
+   *   1-Bit: 11110 (1us high, 0.25us low)
+   * Those values are not an exact match, but they seem to work for both
+   * WS2812 and WS2811 in high-speed-mode.
+   *
+   * We need to send 8 of those 5-packs for each byte. Those 40 bits are
+   * precalculated and stored in a lookup table.
+   *
+   * To issue an reset, the data-line needs to be low for 50us, thats
+   * 200 bits, or 25 bytes. For safety, we will send 27 bytes.
+   *
+   * Connect the Data-In-Pin of the LEDs to the MOSI Pin of the SPI-Module,
+   * ignore the clock Pin.
+   *
+   */
+  const uint8_t reset_bytes = 27;
+  const unsigned int first_slot = m_start_address - 1;  // 0 offset
+  // We always check out the entire string length, even if we only have data
+  // for part of it
+  const unsigned int output_len = reset_bytes + m_pixel_count *
+                                  WS2812_SLOTS_PER_PIXEL * WS2812_SPI_LUT_LEN;
+  uint8_t *output = m_backend->Checkout(m_output_number, output_len, 0);
+
+  if (!output)
+    return;
+
+  // set the reset-bytes to zero
+  memset(output, 0, reset_bytes);
+
+  // loop over all pixels
+  unsigned int output_pos = reset_bytes;
+  for (uint16_t px = 0; px < m_pixel_count * WS2812_SLOTS_PER_PIXEL; px++) {
+    uint8_t c = buffer.Get(px + first_slot);
+    // now output 5 bytes from the LUT
+    for (unsigned int lut = 0; lut < WS2812_SPI_LUT_LEN; lut++) {
+      output[output_pos++] = WS2812_SPI_LUT[c * 5 + lut];
+    }
+  }
   m_backend->Commit(m_output_number);
 }
 
